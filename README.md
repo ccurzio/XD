@@ -1,7 +1,7 @@
 <img width="250" height="275" alt="XD" src="https://github.com/user-attachments/assets/3bfb078b-be8e-49ef-a88a-232b1f4e7752" />
 
 # XD - The Xfiltration Device
-Welcome to the XD Project! The XD is an advanced system for performing data exfiltration on endpoints that are otherwise secured against connecting external mass storage devices (such as USB flash drives or external hard drives). When connected to a computer, the XD presents itself as an ethernet adapter which is then connected to a self-contained sandboxed network. The XD runs an internal webserver which, when accessed using a browser on the connected computer, provides the ability to upload files. The files are stored on a removable Micro SD card, allowing for easy retrieval on a separate device. 
+Welcome to the XD Project! The XD is an advanced system for performing data exfiltration on endpoints that are otherwise secured against connecting external mass storage devices (such as USB flash drives or external hard drives) as well as network-to-internet exfiltration. When connected to a computer, the XD presents itself as an ethernet adapter which connected to a self-contained sandboxed network. The XD runs an internal webserver which, when accessed using a browser on the connected computer, provides the ability to upload files. The files are stored on a removable Micro SD card, allowing for easy retrieval on a separate device. 
 
 ### Features
 - <b>Plug-and-Play:</b> The XD USB interface acts as a standard ethernet adapter, compatible with a wide range of operating systems including macOS, Windows, and Linux. The built-in DHCP server automatically assigns the connected computer an IP address, making manual configuration unnecessary.
