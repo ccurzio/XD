@@ -9,5 +9,5 @@ Welcome to the XD Project! The XD is an advanced system for performing data exfi
 - <b>Built-in Display:</b> The XD has a built-in OLED display, with access to configuration options and providing status information at a glance.
 - <b>Removable Storage:</b> A Micro SD slot offers fast and convenient access to exfiltrated files.
 - <b>Extended Connectivity:</b> The XD provides both ethernet and wireless network connections for versatile use.
-- <b>OTA Updates:</b> When connected as a client to a wireless network, the XD can download and install firmware updates.
+- <b>OTA Updates:</b> When connected as a client to a wireless network, the XD can download and install firmware updates. Firmware integrity is verified using SHA256 hashing.
 - <b>Open Source:</b> The XD is a fully open-source project, offering users the freedom to build, extend, and customize their own XD variations.
