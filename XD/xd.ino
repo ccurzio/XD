@@ -52,7 +52,7 @@ String confString = "Built for ESP32-P4";
 // IP Address Configuration
 IPAddress serverIP(172, 16, 170, 1);
 IPAddress clientIP(172, 16, 170, 2);
-IPAddress gateway(172, 16, 170, 1);
+IPAddress gateway(0, 0, 0, 0);
 IPAddress subnetMask(255, 255, 255, 0);
 IPAddress broadcast(172, 16, 170, 255);
 
@@ -132,9 +132,9 @@ void sendDhcpResponse(const dhcpHeader &request, uint8_t dhcpType) {
   for (int i = 0; i < 4; i++) buffer[idx++] = subnetMask[i];
 
   // Default Gateway
-  buffer[idx++] = DHCP_OPTION_ROUTER;
-  buffer[idx++] = 4;
-  for (int i = 0; i < 4; i++) buffer[idx++] = serverIP[i];
+  //buffer[idx++] = DHCP_OPTION_ROUTER;
+  //buffer[idx++] = 4;
+  //for (int i = 0; i < 4; i++) buffer[idx++] = serverIP[i];
 
   // Lease Time (3600 Seconds)
   buffer[idx++] = DHCP_OPTION_LEASE_TIME;
@@ -147,6 +147,30 @@ void sendDhcpResponse(const dhcpHeader &request, uint8_t dhcpType) {
   buffer[idx++] = 54;
   buffer[idx++] = 4;
   for (int i = 0; i < 4; i++) buffer[idx++] = serverIP[i];
+
+  // Static Route (to not interfere with other connections)
+  buffer[idx++] = 121;
+  buffer[idx++] = 1 + 3 + 4;
+  buffer[idx++] = 24;
+  buffer[idx++] = 172;
+  buffer[idx++] = 16;
+  buffer[idx++] = 170;
+  buffer[idx++] = 0;
+  buffer[idx++] = 0;
+  buffer[idx++] = 0;
+  buffer[idx++] = 0;
+
+  // Static Route (Windows)
+  buffer[idx++] = 249;      // Option 249
+  buffer[idx++] = 1 + 3 + 4;  // length = 8
+  buffer[idx++] = 24;         // prefix length
+  buffer[idx++] = 172;
+  buffer[idx++] = 16;
+  buffer[idx++] = 170;
+  buffer[idx++] = 0;          // next-hop = 0.0.0.0
+  buffer[idx++] = 0;
+  buffer[idx++] = 0;
+  buffer[idx++] = 0;
 
   buffer[idx++] = DHCP_OPTION_END;
 
