@@ -23,7 +23,7 @@ String confString = "Built for for LAN8720";
 #define ETH_PHY_ADDR  1
 #define ETH_PHY_MDC   23
 #define ETH_PHY_MDIO  18
-#define ETH_PHY_POWER -1
+#define ETH_PHY_POWER 5
 // This needed to be changed for WT32-ETH01 clone boards
 // #define ETH_CLK_MODE  ETH_CLOCK_GPIO0_IN
 #define ETH_CLK_MODE  ETH_CLOCK_GPIO0_OUT
@@ -228,6 +228,7 @@ void setup() {
   pinMode(5, OUTPUT);
 
   // Explicit Network Device Reset
+  gpio_set_drive_capability((gpio_num_t)ETH_PHY_POWER, GPIO_DRIVE_CAP_3);
   digitalWrite(5, LOW);
   delay(100);
   digitalWrite(5, HIGH);
@@ -245,19 +246,13 @@ void setup() {
   else { Serial.println("TCP/IP configuration failed."); }
 
   // Start DHCP server
-  if (udp.begin(DHCP_SERVER_PORT)) {
-    Serial.println("DHCP Server started.");
-    }
-  else {
-    Serial.println("Failed to start DHCP Server.");
-    }
+  if (udp.begin(DHCP_SERVER_PORT)) { Serial.println("DHCP Server started."); }
+  else { Serial.println("Failed to start DHCP Server."); }
   }
 
 void loop() {
   if (eth_connected) {
     int packetSize = udp.parsePacket();
-    if (packetSize > 0) {
-      handleDhcpPacket();
-      }
+    if (packetSize > 0) { handleDhcpPacket(); }
     }
   }
