@@ -1,17 +1,25 @@
 // XD - The Xfiltration Device
 // by Christopher R. Curzio
 //
-// The XD is an advanced system for performing data exfiltration on endpoints that are otherwise secured
-// against connecting external mass storage devices (such as USB flash drives or external hard drives) as
-// well as network-to-internet exfiltration. When connected to a computer, the XD presents itself as an
-// ethernet adapter connected to a self-contained sandboxed network. The XD runs an internal webserver
-// which, when accessed using a browser on the connected computer, provides the ability to upload files.
-// The files are stored on a removable Micro SD card, allowing for easy retrieval on a separate device.
+// The XD is an advanced system for performing data exfiltration on endpoints
+// that are otherwise secured against connecting external mass storage devices
+// (such as USB flash drives or external hard drives) as well as 
+// network-to-internet exfiltration. When connected to a computer, the XD
+// presents itself as an ethernet adapter connected to a self-contained
+// sandboxed network. The XD runs an internal webserver which, when accessed
+// using a browser on the connected computer, provides the ability to upload
+// files. The files are stored on a removable Micro SD card, allowing for easy
+// retrieval on a separate device.
 
+String xdver = "0.0.1";
+
+#include "driver/gpio.h"
+#include <Preferences.h>
+#include <SD.h>
 #include <ETH.h>
 #include <IPAddress.h>
 #include <WiFiUdp.h>
-#include "driver/gpio.h"
+#include <WebServer.h>
 
 #ifndef ETH_PHY_MDC
 #define ETH_PHY_TYPE ETH_PHY_LAN8720
@@ -23,6 +31,8 @@ String confString = "Built for for LAN8720";
 #define ETH_PHY_ADDR  1
 #define ETH_PHY_MDC   23
 #define ETH_PHY_MDIO  18
+// We hit this pin later to ensure power stability, so let's define it. 
+//#define ETH_PHY_POWER -1
 #define ETH_PHY_POWER 5
 // This needed to be changed for WT32-ETH01 clone boards
 // #define ETH_CLK_MODE  ETH_CLOCK_GPIO0_IN
@@ -57,7 +67,12 @@ IPAddress subnetMask(255, 255, 255, 0);
 IPAddress broadcast(172, 16, 170, 255);
 
 static bool eth_connected = false;
+static bool client_connected = false;
+
+Preferences preferences;
+File uploadFile;
 WiFiUDP udp;
+WebServer server(80);
 
 struct dhcpHeader {
   uint8_t op, htype, hlen, hops;
@@ -73,6 +88,11 @@ struct dhcpHeader {
 uint32_t ipToUint(IPAddress ip) {
   return (uint32_t)ip[0] << 24 | (uint32_t)ip[1] << 16 | (uint32_t)ip[2] << 8 | (uint32_t)ip[3];
   }
+
+// TODO: SD Card Interface
+// TODO: 4-bit MMC. We really don't want to use SPI if we can avoid it since it's
+// slower and has the potential to interfere with other stuff. But so far SPI is
+// the only thing I can get working.
 
 // Ethernet Event Handler
 void onEvent(arduino_event_id_t event) {
@@ -132,6 +152,7 @@ void sendDhcpResponse(const dhcpHeader &request, uint8_t dhcpType) {
   for (int i = 0; i < 4; i++) buffer[idx++] = subnetMask[i];
 
   // Default Gateway
+  // We hold this back to not kill routing on the connected computer
   //buffer[idx++] = DHCP_OPTION_ROUTER;
   //buffer[idx++] = 4;
   //for (int i = 0; i < 4; i++) buffer[idx++] = serverIP[i];
@@ -205,6 +226,7 @@ void handleDhcpPacket() {
     i += optlen;
     }
 
+  // TODO: Serial output acknowledging client connection
   if (msgType == DHCP_DISCOVER) {
     Serial.println("Received: DHCP DISCOVER");
     sendDhcpResponse(*req, DHCP_OFFER);
@@ -215,23 +237,127 @@ void handleDhcpPacket() {
     }
   }
 
+// WebRoot Handler
+// Probably need to do something to change the title text on the page to something more
+// innocuous-looking. Host-based IPSes have the potential to have signatures which can 
+// then detect stuff like XD, which we don't want. Of course it's also entirely possible
+// those same HIPS solutions can also block HTTP file upload functionality, but hey, one
+// step at a time.
+
+// Yes I know it's HTTP and not HTTPS. HTTPS introduces a lot of overhead for no real
+// benefit in this scenario. Since it's a completely sandboxed network there isn't much
+// in the way of snooping opportunities between the USB ethernet adapter and the XD.
+
+// TODO: Support for uploading multiple files
+void webRoot() {
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XD File Upload</title>
+<style>
+  body {
+    background:#2e2e2e;
+    color:white;
+    font-family: Arial;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin:0;
+    }
+
+  .container {
+    background: #3a3a3a;
+    padding: 20px;
+    border-radius: 10px;
+    max-width: 400px;
+    width: 90%;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+
+  h2 { text-align:center; margin-bottom:15px; }
+
+  input[type="file"] {
+    margin-top: 10px;
+    margin-bottom: 10px;
+    width: 100%;
+    }
+
+  .btn {
+    background: #1e90ff;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+    }
+
+  .btn:hover { background:#0066cc; }
+
+  .delete-btn {
+    background:#ff4d4d;
+    color:white;
+    padding:5px 10px;
+    border:none;
+    border-radius:5px;
+    cursor:pointer;
+    }
+
+  .delete-btn:hover {
+    background:#cc0000;
+    }
+</style>
+</head>
+<body>
+  <div id="upload" class="container">
+    <h2>File Upload</h2>
+    <form method="POST" action="/upload" enctype="multipart/form-data">
+      <input type="file" name="upload" required>
+      <input class="btn" type="submit" value="Upload">
+    </form>
+  </div>
+</body>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", html);
+  }
+
+// TODO: File Upload Handler
+void handleFileUpload() { }
+
+// Upload Confirmation
+void uploadSuccess() {
+  server.send(200, "text/html",
+    "<html><body style='background: #2e2e2e; color: white; font-family: Arial;'>"
+    "<h2>File Uploaded Successfully!</h2>"
+    "<p><a href='/'>Go back</a></p>"
+    "</body></html>");
+  }
+
 void setup() {
   Serial.begin(115200);
   Serial.println("---------------------------");
   Serial.println("XD - THE XFILTRATION DEVICE");
   Serial.println("---------------------------");
+  Serial.print("Version ");
+  Serial.println(xdver);
+  Serial.println();
   Serial.println("Starting XD...");
   delay(500);
 
   // Clock Setup
   pinMode(0, OUTPUT);
-  pinMode(5, OUTPUT);
+  pinMode(ETH_PHY_POWER, OUTPUT);
 
   // Explicit Network Device Reset
   gpio_set_drive_capability((gpio_num_t)ETH_PHY_POWER, GPIO_DRIVE_CAP_3);
-  digitalWrite(5, LOW);
+  digitalWrite(ETH_PHY_POWER, LOW);
   delay(100);
-  digitalWrite(5, HIGH);
+  digitalWrite(ETH_PHY_POWER, HIGH);
   delay(1000);
 
   Serial.println(confString);
@@ -248,11 +374,18 @@ void setup() {
   // Start DHCP server
   if (udp.begin(DHCP_SERVER_PORT)) { Serial.println("DHCP Server started."); }
   else { Serial.println("Failed to start DHCP Server."); }
+
+  // Start Webserver
+  server.on("/", webRoot);
+  server.begin();
+  Serial.println("Webserver started.");
   }
 
 void loop() {
   if (eth_connected) {
     int packetSize = udp.parsePacket();
     if (packetSize > 0) { handleDhcpPacket(); }
+
+    server.handleClient();
     }
   }
