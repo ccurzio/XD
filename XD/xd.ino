@@ -15,7 +15,8 @@ String xdver = "0.0.1";
 
 #include "driver/gpio.h"
 #include <Preferences.h>
-#include <SD.h>
+#include <SD_MMC.h>
+#include <FS.h>
 #include <ETH.h>
 #include <IPAddress.h>
 #include <WiFiUdp.h>
@@ -24,7 +25,6 @@ String xdver = "0.0.1";
 #ifndef ETH_PHY_MDC
 #define ETH_PHY_TYPE ETH_PHY_LAN8720
 #if CONFIG_IDF_TARGET_ESP32
-String confString = "Built for for LAN8720";
 #define ETH_PHY_TYPE  ETH_PHY_LAN8720
 // This needed to be changed for WT32-ETH01 clone boards
 //#define ETH_PHY_ADDR  0
@@ -38,7 +38,6 @@ String confString = "Built for for LAN8720";
 // #define ETH_CLK_MODE  ETH_CLOCK_GPIO0_IN
 #define ETH_CLK_MODE  ETH_CLOCK_GPIO0_OUT
 #elif CONFIG_IDF_TARGET_ESP32P4
-String confString = "Built for ESP32-P4";
 #define ETH_PHY_ADDR  0
 #define ETH_PHY_MDC   31
 #define ETH_PHY_MDIO  52
@@ -59,6 +58,11 @@ String confString = "Built for ESP32-P4";
 #define DHCP_OPTION_LEASE_TIME 51
 #define DHCP_OPTION_END 255
 
+Preferences preferences;
+File uploadFile;
+WiFiUDP udp;
+WebServer server(80);
+
 // IP Address Configuration
 IPAddress serverIP(172, 16, 170, 1);
 IPAddress clientIP(172, 16, 170, 2);
@@ -66,13 +70,12 @@ IPAddress gateway(0, 0, 0, 0);
 IPAddress subnetMask(255, 255, 255, 0);
 IPAddress broadcast(172, 16, 170, 255);
 
+uint64_t sd_size = 0;
+uint64_t sd_used = 0;
+uint64_t sd_free = 0;
+static bool sd_card = false;
 static bool eth_connected = false;
 static bool client_connected = false;
-
-Preferences preferences;
-File uploadFile;
-WiFiUDP udp;
-WebServer server(80);
 
 struct dhcpHeader {
   uint8_t op, htype, hlen, hops;
@@ -89,16 +92,58 @@ uint32_t ipToUint(IPAddress ip) {
   return (uint32_t)ip[0] << 24 | (uint32_t)ip[1] << 16 | (uint32_t)ip[2] << 8 | (uint32_t)ip[3];
   }
 
-// TODO: SD Card Interface
-// TODO: 4-bit MMC. We really don't want to use SPI if we can avoid it since it's
-// slower and has the potential to interfere with other stuff. But so far SPI is
-// the only thing I can get working.
+// SD Card Interface
+void SDInit() {
+  // Using "false" for 4-bit MMC. Set to "true" for 1-bit. (4-bit is faster)
+  if (!SD_MMC.begin("/sdcard", false)) {
+    Serial.println("Failure mounting SD card.");
+    sd_card = false;
+    return;
+    }
+  Serial.println("Successfully mounted SD card.");
+
+  sd_size = SD_MMC.cardSize();
+  sd_used = SD_MMC.usedBytes();
+  sd_free = sd_size - sd_used;
+
+  Serial.print("  Card size: ");
+  Serial.print(sd_size / (1024 * 1024));
+  Serial.println("MB");
+  Serial.print("  Free space: ");
+  Serial.print(sd_free / (1024 * 1024));
+  Serial.println("MB");
+
+  sd_card = true;
+  }
+
+// TODO: SD Card Format
+bool SDFormat() {
+  if (!sd_card) { Serial.println("SD card not detected. Cannot format."); }
+  else {
+    Serial.println("Preparing SD card for format...");
+    SD_MMC.end();
+    sd_card = false;
+    Serial.println("Closed SD card session.");
+    Serial.println("Formatting SD card...");
+    
+    // FORMAT CODE GOES HERE
+
+    if (1 == 0) {
+      // REPLACE "1 == 0" WITH A VALID SUCCESS CHECK
+      Serial.println("SD card format failed. Error: ");
+      return false;
+      }
+    }
+  Serial.println("SD card format complete. Remounting...");
+  SDInit();
+  return sd_card;
+  }
 
 // Ethernet Event Handler
 void onEvent(arduino_event_id_t event) {
   switch (event) {
     case ARDUINO_EVENT_ETH_START:
-      Serial.println("Ethernet interface initialized.");
+      Serial.println("Initializing ethernet interface...");
       break;
     case ARDUINO_EVENT_ETH_CONNECTED:
       Serial.println("Ethernet link established.");
@@ -125,7 +170,7 @@ void onEvent(arduino_event_id_t event) {
   }
 
 // DHCP Response Function
-void sendDhcpResponse(const dhcpHeader &request, uint8_t dhcpType) {
+void sendDHCPResponse(const dhcpHeader &request, uint8_t dhcpType) {
   uint8_t buffer[300] = {0};
   dhcpHeader *resp = (dhcpHeader*)buffer;
 
@@ -182,13 +227,13 @@ void sendDhcpResponse(const dhcpHeader &request, uint8_t dhcpType) {
   buffer[idx++] = 0;
 
   // Static Route (Windows)
-  buffer[idx++] = 249;      // Option 249
-  buffer[idx++] = 1 + 3 + 4;  // length = 8
-  buffer[idx++] = 24;         // prefix length
+  buffer[idx++] = 249;
+  buffer[idx++] = 1 + 3 + 4; 
+  buffer[idx++] = 24;
   buffer[idx++] = 172;
   buffer[idx++] = 16;
   buffer[idx++] = 170;
-  buffer[idx++] = 0;          // next-hop = 0.0.0.0
+  buffer[idx++] = 0;
   buffer[idx++] = 0;
   buffer[idx++] = 0;
   buffer[idx++] = 0;
@@ -204,7 +249,7 @@ void sendDhcpResponse(const dhcpHeader &request, uint8_t dhcpType) {
   }
 
 // DHCP Packet Handler
-void handleDhcpPacket() {
+void handleDHCPPacket() {
   uint8_t buffer[300];
   int len = udp.read(buffer, sizeof(buffer));
   if (len < (int)sizeof(dhcpHeader)) return;
@@ -229,11 +274,11 @@ void handleDhcpPacket() {
   // TODO: Serial output acknowledging client connection
   if (msgType == DHCP_DISCOVER) {
     Serial.println("Received: DHCP DISCOVER");
-    sendDhcpResponse(*req, DHCP_OFFER);
+    sendDHCPResponse(*req, DHCP_OFFER);
     }
   else if (msgType == DHCP_REQUEST) {
     Serial.println("Received: DHCP REQUEST");
-    sendDhcpResponse(*req, DHCP_ACK);
+    sendDHCPResponse(*req, DHCP_ACK);
     }
   }
 
@@ -340,52 +385,69 @@ void uploadSuccess() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.println();
   Serial.println("---------------------------");
   Serial.println("XD - THE XFILTRATION DEVICE");
   Serial.println("---------------------------");
   Serial.print("Version ");
   Serial.println(xdver);
+  Serial.print("Built for ");
+  Serial.println(ARDUINO_BOARD);
   Serial.println();
   Serial.println("Starting XD...");
   delay(500);
 
   // Clock Setup
   pinMode(0, OUTPUT);
-  pinMode(ETH_PHY_POWER, OUTPUT);
+
+  // SD Card Setup
+  SDInit();
 
   // Explicit Network Device Reset
+  Serial.println("Configuring hardware...");
+  pinMode(ETH_PHY_POWER, OUTPUT);
   gpio_set_drive_capability((gpio_num_t)ETH_PHY_POWER, GPIO_DRIVE_CAP_3);
   digitalWrite(ETH_PHY_POWER, LOW);
   delay(100);
   digitalWrite(ETH_PHY_POWER, HIGH);
   delay(1000);
+  Serial.println("Hardware configuration complete.");
 
-  Serial.println(confString);
-  Network.onEvent(onEvent);
+  // Start network stuff if SD card is present
+  if (sd_card) {
+    Network.onEvent(onEvent);
 
-  if (ETH.begin(ETH_PHY_TYPE, ETH_PHY_ADDR, ETH_PHY_MDC, ETH_PHY_MDIO, ETH_PHY_POWER, ETH_CLK_MODE)) {
-    Serial.println("Successfully initialized ethernet.");
+    if (ETH.begin(ETH_PHY_TYPE, ETH_PHY_ADDR, ETH_PHY_MDC, ETH_PHY_MDIO, ETH_PHY_POWER, ETH_CLK_MODE)) {
+      Serial.println("Successfully started ethernet.");
+      }
+    else { Serial.println("Failed to initialize ethernet."); }
+
+    if (ETH.config(serverIP, gateway, subnetMask)) { Serial.println("TCP/IP configuration set successfully."); }
+    else { Serial.println("TCP/IP configuration failed."); }
+
+    // Start DHCP Server
+    if (udp.begin(DHCP_SERVER_PORT)) { Serial.println("DHCP server started."); }
+    else { Serial.println("Failed to start DHCP server."); }
+
+    // Start Webserver
+    server.on("/", webRoot);
+    server.begin();
+    Serial.print("Webserver started: http://");
+    Serial.print(serverIP);
+    Serial.println("/");
     }
-  else { Serial.println("Failed to initialize ethernet."); }
+  else {
 
-  if (ETH.config(serverIP, gateway, subnetMask)) { Serial.println("TCP/IP configuration set successfully."); }
-  else { Serial.println("TCP/IP configuration failed."); }
-
-  // Start DHCP server
-  if (udp.begin(DHCP_SERVER_PORT)) { Serial.println("DHCP Server started."); }
-  else { Serial.println("Failed to start DHCP Server."); }
-
-  // Start Webserver
-  server.on("/", webRoot);
-  server.begin();
-  Serial.println("Webserver started.");
+    }
   }
 
 void loop() {
-  if (eth_connected) {
-    int packetSize = udp.parsePacket();
-    if (packetSize > 0) { handleDhcpPacket(); }
+  if (sd_card) {
+    if (eth_connected) {
+      int packetSize = udp.parsePacket();
+      if (packetSize > 0) { handleDHCPPacket(); }
 
-    server.handleClient();
+      server.handleClient();
+      }
     }
   }
