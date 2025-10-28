@@ -15,6 +15,9 @@ String xdver = "0.0.1";
 
 #include "driver/gpio.h"
 #include <Preferences.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include <SD_MMC.h>
 #include <FS.h>
 #include <ETH.h>
@@ -45,6 +48,10 @@ String xdver = "0.0.1";
 #define ETH_CLK_MODE  EMAC_CLK_EXT_IN
 #endif
 #endif
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
 
 #define DHCP_SERVER_PORT 67
 #define DHCP_CLIENT_PORT 68
@@ -93,6 +100,51 @@ uint32_t ipToUint(IPAddress ip) {
   return (uint32_t)ip[0] << 24 | (uint32_t)ip[1] << 16 | (uint32_t)ip[2] << 8 | (uint32_t)ip[3];
   }
 
+// Display Setup
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Startup Progress
+void startupProg(int percent) {
+  int barMaxWidth = 100;
+  int barHeight = 12;
+  int barX = (SCREEN_WIDTH - barMaxWidth) / 2;
+  int barY = 30;
+
+  int barWidth = map(percent, 0, 100, 0, barMaxWidth);
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor((SCREEN_WIDTH - (strlen("Xfiltration Device") * 6)) / 2,0);
+  display.print("Xfiltration Device");
+  display.setCursor((SCREEN_WIDTH - (strlen("STARTING") * 6)) / 2, barY - 10);
+  display.print("STARTING");
+  display.setCursor((SCREEN_WIDTH / 2) - 10, barY + barHeight + 5);
+  display.drawRect(barX, barY, barMaxWidth, barHeight, SSD1306_WHITE);
+  display.fillRect(barX, barY, barWidth, barHeight, SSD1306_WHITE);
+
+  display.display();
+  }
+
+// Message Display Function
+void dispMessage(const char* title, const char* firstLine, const char* secondLine) {
+  if (title != nullptr && firstLine != nullptr && secondLine != nullptr) {
+    int titleX = (SCREEN_WIDTH - (strlen(title) * 6)) / 2;
+    int line1X = (SCREEN_WIDTH - (strlen(firstLine) * 6)) / 2;
+    int line2X = (SCREEN_WIDTH - (strlen(secondLine) * 6)) / 2;
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(titleX, 0);
+    display.print(title);
+    display.setCursor(line1X, 25);
+    display.print(firstLine);
+    display.setCursor(line2X, 40);
+    display.print(secondLine);
+    display.display();
+    }
+  }
+
 // SD Card Initialization
 void SDInit() {
   Serial.println("Scanning SD card...");
@@ -100,6 +152,7 @@ void SDInit() {
   if (!SD_MMC.begin("/sdcard", false)) {
     Serial.println("Failure mounting SD card.");
     sd_card = false;
+    dispMessage("Critical Error","Could not start XD","No SD Card");
     return;
     }
   Serial.println("Successfully mounted SD card.");
@@ -121,6 +174,7 @@ void SDInit() {
   if (percentUsed >= 100) {
     sd_card = false;
     Serial.println("XD startup failed: SD card is full.");
+    dispMessage("Critical Error","Could not start XD","SD Card is Full");
     }
   else { sd_card = true; }
   }
@@ -183,7 +237,7 @@ void sendDHCPResponse(const dhcpHeader &request, uint8_t dhcpType) {
   uint8_t buffer[300] = {0};
   dhcpHeader *resp = (dhcpHeader*)buffer;
 
-  resp->op = 2;  // BOOTREPLY
+  resp->op = 2;
   resp->htype = 1;
   resp->hlen = 6;
   resp->xid = request.xid;
@@ -624,8 +678,14 @@ void setup() {
   Serial.println("Starting XD...");
   delay(500);
 
+  // Display Initialization
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { for(;;); }
+  startupProg(0);
+
   // Clock Setup
   pinMode(0, OUTPUT);
+  startupProg(5);
 
   // Explicit Network Device Reset
   Serial.println("Configuring device hardware...");
@@ -636,22 +696,26 @@ void setup() {
   digitalWrite(ETH_PHY_POWER, HIGH);
   delay(1000);
   Serial.println("Hardware configuration complete.");
+  startupProg(25);
   
   // SD Card Setup
   SDInit();
 
   // Start network stuff if SD card is present
   if (sd_card) {
+    startupProg(50);
     Network.onEvent(onEvent);
 
     if (ETH.begin(ETH_PHY_TYPE, ETH_PHY_ADDR, ETH_PHY_MDC, ETH_PHY_MDIO, ETH_PHY_POWER, ETH_CLK_MODE)) {
       Serial.println("Successfully started ethernet.");
+      startupProg(60);
       }
     else { Serial.println("Failed to initialize ethernet."); }
 
     if (ETH.config(serverIP, gateway, subnetMask)) {
       delay(500);
       Serial.println("Ethernet configuration successful.");
+      startupProg(75);
       }
     else {
       delay(500);
@@ -659,7 +723,10 @@ void setup() {
       }
 
     // Start DHCP Server
-    if (udp.begin(DHCP_SERVER_PORT)) { Serial.println("DHCP server started."); }
+    if (udp.begin(DHCP_SERVER_PORT)) {
+      Serial.println("DHCP server started.");
+      startupProg(90);
+      }
     else { Serial.println("Failed to start DHCP server."); }
 
     // Start Webserver
@@ -670,6 +737,9 @@ void setup() {
       Serial.print("Webserver started: http://");
       Serial.print(serverIP);
       Serial.println("/");
+      startupProg(100);
+      delay(1000);
+      dispMessage("Xfiltration Device","READY",serverIP.toString().c_str());
       }
       else {
       // TODO: Configuration Controls
@@ -678,6 +748,7 @@ void setup() {
       Serial.print("Webserver started (Config Mode): http://");
       Serial.print(serverIP);
       Serial.println("/");
+      startupProg(100);
       }
     }
   else {
@@ -695,4 +766,3 @@ void loop() {
       }
     }
   }
-  
