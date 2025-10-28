@@ -70,10 +70,11 @@ IPAddress gateway(0, 0, 0, 0);
 IPAddress subnetMask(255, 255, 255, 0);
 IPAddress broadcast(172, 16, 170, 255);
 
-uint64_t sd_size = 0;
-uint64_t sd_used = 0;
-uint64_t sd_free = 0;
+static uint64_t sd_size = 0;
+static uint64_t sd_used = 0;
+static uint64_t sd_free = 0;
 static bool sd_card = false;
+static bool wifi_client = false;
 static bool eth_connected = false;
 static bool client_connected = false;
 
@@ -92,8 +93,9 @@ uint32_t ipToUint(IPAddress ip) {
   return (uint32_t)ip[0] << 24 | (uint32_t)ip[1] << 16 | (uint32_t)ip[2] << 8 | (uint32_t)ip[3];
   }
 
-// SD Card Interface
+// SD Card Initialization
 void SDInit() {
+  Serial.println("Scanning SD card...");
   // Using "false" for 4-bit MMC. Set to "true" for 1-bit. (4-bit is faster)
   if (!SD_MMC.begin("/sdcard", false)) {
     Serial.println("Failure mounting SD card.");
@@ -113,10 +115,17 @@ void SDInit() {
   Serial.print(sd_free / (1024 * 1024));
   Serial.println("MB");
 
-  sd_card = true;
+  float percentUsed = (float)sd_used / (float)sd_size * 100.0;
+  Serial.printf("  Storage Used: %.2f%%\n", percentUsed);
+
+  if (percentUsed >= 100) {
+    sd_card = false;
+    Serial.println("XD startup failed: SD card is full.");
+    }
+  else { sd_card = true; }
   }
 
-// TODO: SD Card Format
+// TODO: SD Card Format Function
 bool SDFormat() {
   if (!sd_card) { Serial.println("SD card not detected. Cannot format."); }
   else {
@@ -252,17 +261,17 @@ void sendDHCPResponse(const dhcpHeader &request, uint8_t dhcpType) {
 void handleDHCPPacket() {
   uint8_t buffer[300];
   int len = udp.read(buffer, sizeof(buffer));
-  if (len < (int)sizeof(dhcpHeader)) return;
+  if (len < (int)sizeof(dhcpHeader)) { return; }
 
   dhcpHeader *req = (dhcpHeader*)buffer;
-  if (ntohl(req->magicCookie) != 0x63825363) return;
+  if (ntohl(req->magicCookie) != 0x63825363) { return; }
 
   uint8_t *options = buffer + sizeof(dhcpHeader);
   uint8_t msgType = 0;
 
-  for (int i = 0; i < len - (int)sizeof(dhcpHeader); ) {
+  for (int i = 0; i < len - (int)sizeof(dhcpHeader);) {
     uint8_t code = options[i++];
-    if (code == DHCP_OPTION_END) break;
+    if (code == DHCP_OPTION_END) { break; }
     uint8_t optlen = options[i++];
     if (code == DHCP_OPTION_MESSAGE_TYPE) {
       msgType = options[i];
@@ -292,15 +301,243 @@ void handleDHCPPacket() {
 // Yes I know it's HTTP and not HTTPS. HTTPS introduces a lot of overhead for no real
 // benefit in this scenario. Since it's a completely sandboxed network there isn't much
 // in the way of snooping opportunities between the USB ethernet adapter and the XD.
-
-// TODO: Support for uploading multiple files
 void webRoot() {
+  Serial.println("HTTP Client: GET /");
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>XD File Upload</title>
+<style>
+  body {
+    background:#2e2e2e;
+    color:white;
+    font-family: Arial;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin:0;
+    }
+
+  .container {
+    background: #3a3a3a;
+    padding: 20px;
+    border-radius: 10px;
+    max-width: 400px;
+    width: 90%;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+
+  h2 { text-align:center; margin-bottom: 15px; }
+
+  input[type="file"] {
+    margin-top: 10px;
+    margin-bottom: 10px;
+    width: 100%;
+    }
+
+  .button {
+    background: #1e90ff;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+    }
+
+  .button:hover { background:#0066cc; }
+
+  .delete-button {
+    background:#ff4d4d;
+    color:white;
+    padding:5px 10px;
+    border:none;
+    border-radius:5px;
+    cursor:pointer;
+    }
+
+  .delete-button:hover {
+    background:#cc0000;
+    }
+
+  .button:disabled {
+    background-color: #aaa;
+    color: #eee;
+    cursor: not-allowed;
+    opacity: 0.7;
+    }
+  
+  .button:disabled:hover { background-color: #aaa; }
+  
+  progress {
+    width: 100%;
+    height: 20px;
+    margin-top: 10px;
+    }
+</style>
+</head>
+<body>
+  <div id="upload" class="container">
+    <h2>XD File Upload</h2>
+    <form id="uploadForm">
+      <input type="file" id="fileInput" name="upload" multiple required><br>
+      <input id="uploadButton" class="button" type="submit" value="Upload">
+      &nbsp;
+      <input id="resetButton" class="button" type="reset" value="Clear" disabled>
+      <input id="cancelButton" class="button" type="button" value="Cancel" hidden="hidden" disabled>
+    </form>
+    <progress id="progressBar" value="0" max="100"></progress>
+    <p id="status" style="text-align: center;">Ready</p>
+  </div>
+
+  <script>
+    const form = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('fileInput');
+    const uploadButton = document.getElementById('uploadButton');
+    const resetButton = document.getElementById('resetButton');
+    const cancelButton = document.getElementById('cancelButton');
+    const progressBar = document.getElementById('progressBar');
+    const status = document.getElementById('status');
+
+    if (fileInput.files.length === 0) {
+      uploadButton.disabled = true;
+      resetButton.disabled = true;
+      cancelButton.disabled = true;
+      cancelButton.hidden = true;
+      }
+
+    fileInput.addEventListener('change', () => {
+      uploadButton.disabled = fileInput.files.length === 0;
+      resetButton.disabled = fileInput.files.length === 0;
+      });
+
+    form.addEventListener('reset', () => {
+      uploadButton.disabled = true;
+      resetButton.disabled = true;
+      cancelButton.disabled = true;
+      cancelButton.hidden = true;
+      fileInput.disabled = false;
+      });
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      fileInput.disabled = true;
+      uploadButton.disabled = true;
+      resetButton.hidden = true;
+      cancelButton.hidden = false;
+      cancelButton.disabled = false;
+
+      const files = fileInput.files;
+      const formData = new FormData();
+      const xhr = new XMLHttpRequest();
+
+      for (const file of files) { formData.append('upload', file); }
+
+      xhr.open('POST', '/upload', true);
+      xhr.upload.addEventListener('progress', function (event) {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          progressBar.value = percent;
+          status.textContent = `Uploading... ${percent}%`;
+          }
+        });
+
+      xhr.addEventListener('load', function () {
+        if (xhr.status === 200) {
+          status.textContent = 'Upload Complete';
+          fileInput.disabled = false;
+          cancelButton.disabled = true;
+          cancelButton.hidden = true;
+          resetButton.hidden = false;
+          resetButton.disabled = false;
+          }
+        else { status.textContent = 'Upload Failed.'; }
+        });
+
+      xhr.addEventListener('abort', () => {
+        progressBar.value = 0;
+        status.textContent = 'Aborted';
+        fileInput.disabled = false;
+        uploadButton.disabled = false;
+        cancelButton.disabled = true;
+        cancelButton.hidden = true;
+        resetButton.hidden = false;
+        });
+
+      xhr.addEventListener('error', function () { status.textContent = 'Upload Error'; });
+      xhr.send(formData);
+
+      cancelButton.addEventListener('click', () => {
+        if (xhr) { xhr.abort(); }
+        });
+    });
+  </script>
+</body>
+</html>
+
+)rawliteral";
+
+  server.send(200, "text/html", html);
+  }
+
+// File Upload Handler
+void handleFileUpload() {
+  HTTPUpload& upload = server.upload();
+
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      String filename = "/" + upload.filename;
+      Serial.printf("Upload Start: %s\n", filename.c_str());
+      uploadFile = SD_MMC.open(filename, FILE_WRITE);
+      if (!uploadFile) {
+        Serial.print("Failure opening file \"");
+        Serial.print(upload.filename);
+        Serial.println("\" for writing.");
+        }
+      break;
+      }
+    case UPLOAD_FILE_WRITE:
+      if (uploadFile) { uploadFile.write(upload.buf, upload.currentSize); }
+      break;
+    case UPLOAD_FILE_END:
+      if (uploadFile) {
+        uploadFile.close();
+        Serial.printf("Upload Success: %s (%u bytes)\n", upload.filename.c_str(), upload.totalSize);
+        }
+      break;
+    case UPLOAD_FILE_ABORTED:
+      if (uploadFile) {
+        uploadFile.close();
+        Serial.println("Upload operation aborted by user.");
+        }
+      break;
+    }
+  }
+
+// Upload Confirmation
+void uploadSuccess() {
+  Serial.println("Upload operation complete.");
+  server.send(200, "text/html",
+    "<!DOCTYPE html><html>"
+    "<head><title>Upload Complete</title></head>"
+    "<body style='background: #2e2e2e; color: white; font-family: Arial;'>"
+    "<h2>Upload Successful!</h2>"
+    "<p><a href='/'>Go back</a></p>"
+    "</body></html>");
+  }
+
+// TODO: Web Configuration Handler
+void configRoot() {
+  Serial.println("HTTP Client: GET /");
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XD Configuration</title>
 <style>
   body {
     background:#2e2e2e;
@@ -330,7 +567,7 @@ void webRoot() {
     width: 100%;
     }
 
-  .btn {
+  .button {
     background: #1e90ff;
     color: white;
     padding: 10px 20px;
@@ -340,9 +577,9 @@ void webRoot() {
     font-size: 16px;
     }
 
-  .btn:hover { background:#0066cc; }
+  .button:hover { background:#0066cc; }
 
-  .delete-btn {
+  .delete-button {
     background:#ff4d4d;
     color:white;
     padding:5px 10px;
@@ -351,36 +588,26 @@ void webRoot() {
     cursor:pointer;
     }
 
-  .delete-btn:hover {
+  .delete-button:hover {
     background:#cc0000;
+    }
+
+  progress {
+    width: 100%;
+    height: 20px;
+    margin-top: 10px;
     }
 </style>
 </head>
 <body>
-  <div id="upload" class="container">
-    <h2>File Upload</h2>
-    <form method="POST" action="/upload" enctype="multipart/form-data">
-      <input type="file" name="upload" required>
-      <input class="btn" type="submit" value="Upload">
-    </form>
+  <div id="config" class="container">
+    <h2>XD Configuration</h2>
   </div>
 </body>
 </html>
 )rawliteral";
 
   server.send(200, "text/html", html);
-  }
-
-// TODO: File Upload Handler
-void handleFileUpload() { }
-
-// Upload Confirmation
-void uploadSuccess() {
-  server.send(200, "text/html",
-    "<html><body style='background: #2e2e2e; color: white; font-family: Arial;'>"
-    "<h2>File Uploaded Successfully!</h2>"
-    "<p><a href='/'>Go back</a></p>"
-    "</body></html>");
   }
 
 void setup() {
@@ -400,11 +627,8 @@ void setup() {
   // Clock Setup
   pinMode(0, OUTPUT);
 
-  // SD Card Setup
-  SDInit();
-
   // Explicit Network Device Reset
-  Serial.println("Configuring hardware...");
+  Serial.println("Configuring device hardware...");
   pinMode(ETH_PHY_POWER, OUTPUT);
   gpio_set_drive_capability((gpio_num_t)ETH_PHY_POWER, GPIO_DRIVE_CAP_3);
   digitalWrite(ETH_PHY_POWER, LOW);
@@ -412,6 +636,9 @@ void setup() {
   digitalWrite(ETH_PHY_POWER, HIGH);
   delay(1000);
   Serial.println("Hardware configuration complete.");
+  
+  // SD Card Setup
+  SDInit();
 
   // Start network stuff if SD card is present
   if (sd_card) {
@@ -422,22 +649,39 @@ void setup() {
       }
     else { Serial.println("Failed to initialize ethernet."); }
 
-    if (ETH.config(serverIP, gateway, subnetMask)) { Serial.println("TCP/IP configuration set successfully."); }
-    else { Serial.println("TCP/IP configuration failed."); }
+    if (ETH.config(serverIP, gateway, subnetMask)) {
+      delay(500);
+      Serial.println("Ethernet configuration successful.");
+      }
+    else {
+      delay(500);
+      Serial.println("Ethernet configuration failed.");
+      }
 
     // Start DHCP Server
     if (udp.begin(DHCP_SERVER_PORT)) { Serial.println("DHCP server started."); }
     else { Serial.println("Failed to start DHCP server."); }
 
     // Start Webserver
-    server.on("/", webRoot);
-    server.begin();
-    Serial.print("Webserver started: http://");
-    Serial.print(serverIP);
-    Serial.println("/");
+    if (wifi_client == false) {
+      server.on("/", webRoot);
+      server.on("/upload", HTTP_POST, uploadSuccess, handleFileUpload);
+      server.begin();
+      Serial.print("Webserver started: http://");
+      Serial.print(serverIP);
+      Serial.println("/");
+      }
+      else {
+      // TODO: Configuration Controls
+      server.on("/", configRoot);
+      server.begin();
+      Serial.print("Webserver started (Config Mode): http://");
+      Serial.print(serverIP);
+      Serial.println("/");
+      }
     }
   else {
-
+    Serial.println("XD startup failed: SD card not detected.");
     }
   }
 
@@ -451,3 +695,4 @@ void loop() {
       }
     }
   }
+  
