@@ -5,7 +5,7 @@ Welcome to the XD Project! The XD is an advanced system for performing data exfi
 
 ### Features
 - <b>Plug-and-Play:</b> The XD USB interface acts as a standard ethernet adapter, compatible with a wide range of operating systems including macOS, Windows, and Linux. The built-in DHCP server automatically assigns the connected computer an IP address, making manual configuration unnecessary.
-- <b>Self-Contained:</b> The XD's sandboxed network utilizes internal IP address space, bypassing in-line network proxy security. 
+- <b>Self-Contained:</b> The XD's sandboxed network utilizes internal IP address space by default, bypassing in-line network security. 
 - <b>Built-in Display:</b> The XD has a built-in OLED display, with access to configuration options and providing status information at a glance.
 - <b>Removable Storage:</b> A Micro SD slot offers fast and convenient access to exfiltrated files.
 - <b>Extended Connectivity:</b> The XD provides both ethernet and wireless network connections for versatile use.
